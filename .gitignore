@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtuelle Umgebungen
+venv/
+.venv/
+
+# macOS
+.DS_Store
+
+# Umgebungsvariablen / Secrets
+.env
+.env.*
