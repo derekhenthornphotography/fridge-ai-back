@@ -88,7 +88,7 @@ if uploaded_file is not None:
     if st.button("Bild analysieren"):
         with st.spinner("Schicke Bild an dein Backend..."):
             try:
-                detected_items = call_backend_analyze(image_bytes, content_type)
+                                detected_items = call_backend_analyze(image_bytes, content_type)
             except requests.HTTPError as e:
                 st.error(f"HTTP-Fehler vom Backend (/analyze-image/): {e.response.text}")
             except Exception as e:
@@ -98,21 +98,64 @@ if uploaded_file is not None:
                     st.warning("Keine relevanten Lebensmittel erkannt.")
                 else:
                     st.subheader("Erkannte Lebensmittel")
+
+                    # 1. Anzeige der rohen Erkennung
                     for item in detected_items:
-                        if item["score"] < CONFIDENCE_THRESHOLD:
-                            continue
                         st.write(f"- **{item['name']}** ({item['score']:.2f})")
 
+                    st.markdown("---")
+
+                    # 2. Benutzerdefinierte Bearbeitung: Auswahl + eigenes Hinzufügen
+                    st.subheader("Lebensmittel bearbeiten")
+
+                    # Vorschlagsliste (nur Namen, ohne Score)
+                    detected_names = [it["name"] for it in detected_items]
+
+                    # Multi-Select mit vorausgewählten erkannten Items
+                    selected_items = st.multiselect(
+                        "Welche Zutaten sollen für die Rezepte genutzt werden?",
+                        options=detected_names,
+                        default=detected_names,
+                    )
+
+                    extra_items_str = st.text_input(
+                        "Optional: Weitere Zutaten von Hand hinzufügen (Komma-getrennt)",
+                        value="",
+                        placeholder="z.B. paprika, feta, tomaten",
+                    )
+
+                    # Liste der finalen Items zusammenbauen
+                    final_items = []
+
+                    # aus der Auswahl
+                    for it in detected_items:
+                        if it["name"] in selected_items:
+                            final_items.append(it)
+
+                    # manuell hinzugefügte Zutaten ohne Score = 1.0
+                    if extra_items_str.strip():
+                        extra_names = [
+                            x.strip().lower()
+                            for x in extra_items_str.split(",")
+                            if x.strip()
+                        ]
+                        for name in extra_names:
+                            final_items.append({"name": name, "score": 1.0})
+
+                    if not final_items:
+                        st.info("Bitte mindestens eine Zutat auswählen oder hinzufügen.")
+                        return
+
+                    st.markdown("---")
                     st.subheader("Rezeptideen (aus Backend)")
 
-                    # Filter: nur Rezepte, bei denen alles vorhanden ist
                     only_full = st.checkbox(
                         "Nur Rezepte anzeigen, für die alle Zutaten vorhanden sind",
                         value=False,
                     )
 
                     try:
-                        suggestions = call_backend_recipes(detected_items)
+                        suggestions = call_backend_recipes(final_items)
                     except requests.HTTPError as e:
                         st.error(f"HTTP-Fehler vom Backend (/suggest-recipes/): {e.response.text}")
                     except Exception as e:
@@ -139,7 +182,7 @@ if uploaded_file is not None:
                                 st.markdown(f"### 🍽️ {name} ({match_info})")
                                 st.write("**Zutaten:** ", ", ".join(ingredients))
                                 st.write(
-                                    "✅ Bereits erkannt:",
+                                    "✅ Bereits erkannt/ausgewählt:",
                                     ", ".join(have) if have else "–",
                                 )
                                 st.write(
