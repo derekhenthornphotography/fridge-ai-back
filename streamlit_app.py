@@ -213,7 +213,7 @@ st.markdown(
 
 KitchenWise is under active development.  
 If you notice strange detections or recipe suggestions, feel free to send feedback to  
-📧 `your-email@domain.com`
+📧 `kitchenwise@ess2studios.com`
 """
 )
                                         
