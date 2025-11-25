@@ -66,109 +66,120 @@ def call_backend_recipes(detected_items: List[Dict[str, Any]]) -> List[Dict[str,
 
 # === Streamlit UI ===
 
-st.set_page_config(page_title="Fridge AI – Food Detector", page_icon="🥕")
-
-st.title("Fridge AI – Lebensmittelerkennung & Rezeptideen")
-
-st.write(
-    "Dieses Frontend spricht mit deinem eigenen FastAPI-Backend:\n"
-    "- `/analyze-image/` erkennt Lebensmittel auf dem Bild\n"
-    "- `/suggest-recipes/` schlägt dir passende Rezepte und Einkaufslisten vor"
+st.set_page_config(
+    page_title="KitchenWise – Your cooking companion",
+    page_icon="🍳",
 )
 
+st.title("KitchenWise")
+st.subheader("Your cooking companion for everyday meals.")
+
+st.write(
+    """
+Upload a photo of your ingredients and let KitchenWise:
+
+- **Recognise what’s there** using food image detection  
+- **Suggest practical recipes** based on what you already have  
+- **Create a focused shopping list** only for what’s missing  
+
+This is an early **beta version** – results may not always be perfect.
+Your feedback helps to improve the app.
+"""
+)
+
+st.markdown("### 1. Upload a fridge or ingredient photo")
+
 uploaded_file = st.file_uploader(
-    "Bild auswählen", type=["jpg", "jpeg", "png", "webp"]
+    "Choose a photo (JPG/PNG/WebP)", type=["jpg", "jpeg", "png", "webp"]
 )
 
 if uploaded_file is not None:
-    st.image(uploaded_file, caption="Hochgeladenes Bild", use_column_width=True)
+    st.image(uploaded_file, caption="Uploaded image", use_column_width=True)
     image_bytes = uploaded_file.read()
-    content_type = uploaded_file.type  # z.B. image/jpeg
+    content_type = uploaded_file.type or "image/jpeg"
 
-    if st.button("Bild analysieren"):
-        with st.spinner("Schicke Bild an dein Backend..."):
+    st.markdown("### 2. Analyse ingredients and get recipes")
+
+    if st.button("Analyse image"):
+        with st.spinner("Sending image to your backend..."):
             try:
-                                detected_items = call_backend_analyze(image_bytes, content_type)
+                detected_items = call_backend_analyze(image_bytes, content_type)
             except requests.HTTPError as e:
-                st.error(f"HTTP-Fehler vom Backend (/analyze-image/): {e.response.text}")
+                st.error(f"HTTP error from backend (/analyze-image/): {e.response.text}")
             except Exception as e:
-                st.error(f"Fehler bei der Analyse: {e}")
+                st.error(f"Error during analysis: {e}")
             else:
                 if not detected_items:
-                    st.warning("Keine relevanten Lebensmittel erkannt.")
+                    st.warning("No relevant food items detected.")
                 else:
-                    st.subheader("Erkannte Lebensmittel")
-
-                    # 1. Anzeige der rohen Erkennung
+                    # 1. Show raw detection results
+                    st.subheader("Detected ingredients")
                     for item in detected_items:
+                        if item["score"] < CONFIDENCE_THRESHOLD:
+                            continue
                         st.write(f"- **{item['name']}** ({item['score']:.2f})")
 
                     st.markdown("---")
+                    st.subheader("Adjust ingredients")
 
-                    # 2. Benutzerdefinierte Bearbeitung: Auswahl + eigenes Hinzufügen
-                    st.subheader("Lebensmittel bearbeiten")
-
-                    # Vorschlagsliste (nur Namen, ohne Score)
                     detected_names = [it["name"] for it in detected_items]
 
-                    # Multi-Select mit vorausgewählten erkannten Items
                     selected_items = st.multiselect(
-                        "Welche Zutaten sollen für die Rezepte genutzt werden?",
+                        "Which ingredients should be used for recipe suggestions?",
                         options=detected_names,
                         default=detected_names,
                     )
 
                     extra_items_str = st.text_input(
-                        "Optional: Weitere Zutaten von Hand hinzufügen (Komma-getrennt)",
+                        "Optional: Add more ingredients manually (comma-separated)",
                         value="",
-                        placeholder="z.B. paprika, feta, tomaten",
+                        placeholder="e.g. paprika, feta, tomatoes",
                     )
 
-                    # Liste der finalen Items zusammenbauen
+                    # Build final list of ingredients
                     final_items = []
 
-                    # aus der Auswahl
+                    # Selected detected items
                     for it in detected_items:
                         if it["name"] in selected_items:
                             final_items.append(it)
 
-                   # manuell hinzugefügte Zutaten ohne Score = 1.0
-if extra_items_str.strip():
-    extra_names = [
-        x.strip().lower()
-        for x in extra_items_str.split(",")
-        if x.strip()
-    ]
-    for name in extra_names:
-        final_items.append({"name": name, "score": 1.0})
+                    # Manually added items (score = 1.0)
+                    if extra_items_str.strip():
+                        extra_names = [
+                            x.strip().lower()
+                            for x in extra_items_str.split(",")
+                            if x.strip()
+                        ]
+                        for name in extra_names:
+                            final_items.append({"name": name, "score": 1.0})
 
-if not final_items:
-    st.info("Bitte mindestens eine Zutat auswählen oder hinzufügen.")
-    st.stop()
-                       
+                    if not final_items:
+                        st.info("Please select or add at least one ingredient.")
+                        st.stop()  # stop Streamlit run here
 
                     st.markdown("---")
-                    st.subheader("Rezeptideen (aus Backend)")
+                    st.subheader("Recipe ideas (from backend)")
 
                     only_full = st.checkbox(
-                        "Nur Rezepte anzeigen, für die alle Zutaten vorhanden sind",
+                        "Show only recipes where all ingredients are available",
                         value=False,
                     )
 
                     try:
                         suggestions = call_backend_recipes(final_items)
                     except requests.HTTPError as e:
-                        st.error(f"HTTP-Fehler vom Backend (/suggest-recipes/): {e.response.text}")
+                        st.error(f"HTTP error from backend (/suggest-recipes/): {e.response.text}")
                     except Exception as e:
-                        st.error(f"Fehler bei der Rezeptberechnung: {e}")
+                        st.error(f"Error while getting recipes: {e}")
                     else:
                         if not suggestions:
                             st.info(
-                                "Für diese Kombination sind im Backend noch keine Rezepte hinterlegt."
+                                "No recipes available for this combination yet in the backend."
                             )
                         else:
                             for s in suggestions:
-                                name = s.get("name", "Unbenanntes Rezept")
+                                name = s.get("name", "Unnamed recipe")
                                 ingredients = s.get("ingredients", [])
                                 steps = s.get("steps", [])
                                 have = s.get("have", [])
@@ -178,19 +189,19 @@ if not final_items:
                                 if only_full and missing:
                                     continue
 
-                                match_info = f"{len(have)}/{total} Zutaten vorhanden"
+                                match_info = f"{len(have)}/{total} ingredients available"
 
                                 st.markdown(f"### 🍽️ {name} ({match_info})")
-                                st.write("**Zutaten:** ", ", ".join(ingredients))
+                                st.write("**Ingredients:** ", ", ".join(ingredients))
                                 st.write(
-                                    "✅ Bereits erkannt/ausgewählt:",
+                                    "✅ Already available:",
                                     ", ".join(have) if have else "–",
                                 )
                                 st.write(
-                                    "🛒 Noch einkaufen:",
-                                    ", ".join(missing) if missing else "Nichts, alles da!",
+                                    "🛒 To buy:",
+                                    ", ".join(missing) if missing else "Nothing, you have everything!",
                                 )
 
-                                with st.expander("Zubereitung anzeigen"):
+                                with st.expander("Show preparation steps"):
                                     for i, step in enumerate(steps, start=1):
                                         st.write(f"{i}. {step}")
