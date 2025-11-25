@@ -132,19 +132,20 @@ if uploaded_file is not None:
                         if it["name"] in selected_items:
                             final_items.append(it)
 
-                    # manuell hinzugefügte Zutaten ohne Score = 1.0
-                    if extra_items_str.strip():
-                        extra_names = [
-                            x.strip().lower()
-                            for x in extra_items_str.split(",")
-                            if x.strip()
-                        ]
-                        for name in extra_names:
-                            final_items.append({"name": name, "score": 1.0})
+                   # manuell hinzugefügte Zutaten ohne Score = 1.0
+if extra_items_str.strip():
+    extra_names = [
+        x.strip().lower()
+        for x in extra_items_str.split(",")
+        if x.strip()
+    ]
+    for name in extra_names:
+        final_items.append({"name": name, "score": 1.0})
 
-                    if not final_items:
-                        st.info("Bitte mindestens eine Zutat auswählen oder hinzufügen.")
-                        return
+if not final_items:
+    st.info("Bitte mindestens eine Zutat auswählen oder hinzufügen.")
+    st.stop()
+                       
 
                     st.markdown("---")
                     st.subheader("Rezeptideen (aus Backend)")
