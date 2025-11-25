@@ -205,3 +205,15 @@ if uploaded_file is not None:
                                 with st.expander("Show preparation steps"):
                                     for i, step in enumerate(steps, start=1):
                                         st.write(f"{i}. {step}")
+
+st.markdown("---")
+st.markdown(
+    """
+**Beta version**
+
+KitchenWise is under active development.  
+If you notice strange detections or recipe suggestions, feel free to send feedback to  
+📧 `your-email@domain.com`
+"""
+)
+                                        
