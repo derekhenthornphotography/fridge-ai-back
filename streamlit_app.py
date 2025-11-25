@@ -94,7 +94,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    st.image(uploaded_file, caption="Uploaded image", use_column_width=True)
+    st.image(uploaded_file, caption="Uploaded image", use_container_width=True)
     image_bytes = uploaded_file.read()
     content_type = uploaded_file.type or "image/jpeg"
 
