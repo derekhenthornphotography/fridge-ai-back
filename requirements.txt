@@ -4,4 +4,5 @@ python-multipart
 clarifai
 requests
 streamlit
+openai>=1.40.0
 
