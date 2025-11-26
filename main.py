@@ -1,5 +1,6 @@
 import os
 import base64
+import json
 from typing import List, Dict, Any
 
 import requests
@@ -7,8 +8,9 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from openai import OpenAI
 
-# === Clarifai-Konfiguration ===
+# === Clarifai configuration ===
 
 USER_ID = "epicureanapps"
 APP_ID = "fridge-ai-app"
@@ -20,54 +22,54 @@ API_URL = (
     f"models/{MODEL_ID}/versions/{MODEL_VERSION_ID}/outputs"
 )
 
-CONFIDENCE_THRESHOLD = 0.05  # Mindest-Sicherheit für ein erfasstes Lebensmittel
-# === Einfache Demo-Rezepte (gleiche Logik wie in Streamlit) ===
+CONFIDENCE_THRESHOLD = 0.05  # minimum confidence for a detected food item
+
+# === Simple demo recipe DB (optional / legacy) ===
 
 RECIPE_DB = [
     {
         "name": "Tomato Mozzarella Sandwich",
         "ingredients": ["bread", "cheese", "tomato", "lettuce"],
         "steps": [
-            "Brot in Scheiben schneiden und ggf. toasten.",
-            "Tomaten und Salat waschen und in Scheiben schneiden.",
-            "Käse auf das Brot legen, mit Tomate und Salat belegen.",
-            "Mit Salz, Pfeffer und etwas Öl oder Butter abschmecken.",
+            "Slice the bread and toast if desired.",
+            "Wash and slice tomatoes and lettuce.",
+            "Layer cheese, tomato, and lettuce on the bread.",
+            "Season with salt, pepper and a bit of oil or butter.",
         ],
     },
     {
         "name": "Simple Cheese Omelette",
         "ingredients": ["egg", "cheese", "butter"],
         "steps": [
-            "Eier in einer Schüssel verquirlen.",
-            "Butter in einer Pfanne erhitzen.",
-            "Eier in die Pfanne geben und stocken lassen.",
-            "Käse dazugeben, zusammenklappen und kurz weiterbraten.",
+            "Beat the eggs in a bowl.",
+            "Melt butter in a pan.",
+            "Pour in the eggs and let them set.",
+            "Add cheese, fold and cook briefly.",
         ],
     },
     {
         "name": "Garlic Bread",
         "ingredients": ["bread", "butter", "garlic"],
         "steps": [
-            "Backofen vorheizen.",
-            "Butter mit Knoblauch verrühren.",
-            "Brot mit der Mischung bestreichen.",
-            "Im Ofen goldbraun backen.",
+            "Preheat the oven.",
+            "Mix butter with minced garlic.",
+            "Spread the mixture on the bread.",
+            "Bake until golden brown.",
         ],
     },
     {
         "name": "Shrimp Pasta",
         "ingredients": ["shrimp", "garlic", "butter", "pasta", "cheese"],
         "steps": [
-            "Pasta in Salzwasser al dente kochen.",
-            "Butter und Knoblauch in einer Pfanne erhitzen.",
-            "Shrimps kurz scharf anbraten.",
-            "Pasta dazugeben, mit Käse bestreuen und servieren.",
+            "Cook pasta in salted water until al dente.",
+            "Heat butter and garlic in a pan.",
+            "Sear the shrimp briefly.",
+            "Add pasta, toss, sprinkle with cheese and serve.",
         ],
     },
 ]
 
-
-# === Pydantic-Modelle für /suggest-recipes/ ===
+# === Pydantic models ===
 
 class DetectedItem(BaseModel):
     name: str
@@ -78,37 +80,47 @@ class RecipeSuggestionRequest(BaseModel):
     items: List[DetectedItem]
 
 
-# === FastAPI-App ===
+class RecipeAIRequest(BaseModel):
+    items: List[DetectedItem]
+
+
+# === FastAPI app ===
 
 app = FastAPI(
     title="Fridge AI Backend",
-    description="Image → Food-Items-Erkennung über Clarifai (REST)",
-    version="0.1.0",
+    description="Image → food item detection via Clarifai (REST) + AI recipes via OpenAI",
+    version="0.2.0",
 )
 
-# CORS offen lassen für Prototypen (später enger machen)
+# OpenAI client (API key must be set as environment variable OPENAI_API_KEY)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# CORS – open for prototyping (can be restricted later)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # später: Domains deiner App
+    allow_origins=["*"],  # later: restrict to your domains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+# === Clarifai call ===
+
 def call_clarifai(image_bytes: bytes) -> List[Dict[str, Any]]:
     """
-    Schickt Bildbytes per REST an Clarifai und gibt eine
-    sortierte Liste erkannter Lebensmittel zurück.
+    Sends image bytes to Clarifai via REST and returns
+    a sorted list of detected food items.
     """
     clarifai_pat = os.environ.get("CLARIFAI_PAT")
     if not clarifai_pat:
         raise RuntimeError(
-            "CLARIFAI_PAT ist nicht gesetzt. Bitte im Terminal z.B. ausführen:\n"
-            'export CLARIFAI_PAT="DEIN_FUNKTIONSFÄHIGER_PAT"'
+            "CLARIFAI_PAT is not set. Please set it, e.g.:\n"
+            'export CLARIFAI_PAT="YOUR_WORKING_PAT"'
         )
 
-    # Bild base64-kodieren
+    # base64 encode the image
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     headers = {
@@ -130,14 +142,13 @@ def call_clarifai(image_bytes: bytes) -> List[Dict[str, Any]]:
     try:
         resp.raise_for_status()
     except requests.HTTPError as e:
-        raise RuntimeError(f"HTTP-Fehler von Clarifai: {e}, Body: {resp.text}") from e
+        raise RuntimeError(f"HTTP error from Clarifai: {e}, Body: {resp.text}") from e
 
     data = resp.json()
 
     status = data.get("status", {})
-    if status.get("code") != 10000:
-        # 10000 = SUCCESS bei Clarifai
-        raise RuntimeError(f"Clarifai-Statusfehler: {status}")
+    if status.get("code") != 10000:  # 10000 = SUCCESS
+        raise RuntimeError(f"Clarifai status error: {status}")
 
     outputs = data.get("outputs", [])
     if not outputs:
@@ -157,11 +168,9 @@ def call_clarifai(image_bytes: bytes) -> List[Dict[str, Any]]:
     items = sorted(items, key=lambda x: x["score"], reverse=True)
     return items
 
+
+# Optional: still here, even if we mainly switch to AI recipes
 def compute_recipe_suggestions(detected_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Nimmt erkannte Lebensmittel und liefert passende Rezepte mit
-    bereits vorhandenen und fehlenden Zutaten.
-    """
     detected_names = {item["name"] for item in detected_items}
     suggestions: List[Dict[str, Any]] = []
 
@@ -190,52 +199,93 @@ def compute_recipe_suggestions(detected_items: List[Dict[str, Any]]) -> List[Dic
 
     return suggestions
 
-@app.post("/analyze-image/", summary="Bild analysieren und Lebensmittel erkennen")
+
+# === Routes ===
+
+@app.post("/analyze-image/", summary="Analyse image and detect food items")
 async def analyze_image(file: UploadFile = File(...)):
     """
-    Nimmt ein hochgeladenes Bild entgegen, ruft Clarifai auf
-    und gibt erkannte Lebensmittel zurück.
+    Takes an uploaded image, calls Clarifai and returns detected food items.
     """
-    # Dateityp grob prüfen
     if file.content_type not in ("image/jpeg", "image/png", "image/webp", "image/jpg"):
-        raise HTTPException(status_code=400, detail="Bitte ein Bild (JPEG/PNG/WEBP) hochladen.")
+        raise HTTPException(status_code=400, detail="Please upload an image (JPEG/PNG/WEBP).")
 
     try:
         image_bytes = await file.read()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Bild konnte nicht gelesen werden: {e}")
+        raise HTTPException(status_code=400, detail=f"Could not read image: {e}")
 
     try:
         items = call_clarifai(image_bytes)
     except RuntimeError as e:
-        # interne Fehler, z.B. CLARIFAI_PAT fehlt oder Clarifai-Statusfehler
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unerwarteter Fehler: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
     return JSONResponse(content={"items": items})
 
-@app.post("/suggest-recipes/", summary="Aus erkannten Lebensmitteln Rezeptvorschläge generieren")
-async def suggest_recipes_endpoint(payload: RecipeSuggestionRequest):
+
+@app.post("/ai-recipes/")
+async def ai_recipes(payload: RecipeAIRequest) -> Dict[str, Any]:
     """
-    Erwartet eine Liste erkannter Lebensmittel (name + score)
-    und liefert passende Rezepte zurück.
+    Takes detected items and asks OpenAI for matching recipes.
+    Returns a list of recipes with ingredients, steps, and 'have'/'missing'.
     """
+    if not OPENAI_API_KEY or client is None:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured on the server")
 
-    # Items in ein einfaches Dict-Format bringen
-    detected_items = [
-        {"name": item.name.lower(), "score": float(item.score)}
-        for item in payload.items
-    ]
+    ingredient_list = [item.name.lower() for item in payload.items if item.name]
 
-    suggestions = compute_recipe_suggestions(detected_items)
+    if not ingredient_list:
+        raise HTTPException(status_code=400, detail="No ingredients provided")
 
-    return JSONResponse(content={"suggestions": suggestions})
+    system_prompt = (
+        "You are a helpful cooking assistant. "
+        "The user has some ingredients available. "
+        "Suggest 3 realistic, home-cook friendly recipes. "
+        "Each recipe must have: name, ingredients list, step-by-step instructions, "
+        "and two lists: 'have' (ingredients already available) and 'missing' (what to buy). "
+        "Keep recipes simple, 20–40 minutes cooking time. "
+        "Respond ONLY with valid JSON."
+    )
 
-@app.get("/health", summary="Health-Check für das Backend")
+    user_prompt = (
+        "Available ingredients: " + ", ".join(ingredient_list) + ".\n"
+        "Return a JSON object with exactly this structure:\n"
+        "{\n"
+        '  \"recipes\": [\n'
+        "    {\n"
+        '      \"name\": \"...\",\n'
+        '      \"ingredients\": [\"...\", \"...\"],\n'
+        '      \"steps\": [\"step 1\", \"step 2\", \"...\"],\n'
+        '      \"have\": [\"...\"],\n'
+        '      \"missing\": [\"...\"]\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.5,
+        )
+        content = response.choices[0].message.content
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Could not parse AI response as JSON")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI error: {e}")
+
+    recipes = data.get("recipes", [])
+    return {"suggestions": recipes}
+
+
+@app.get("/health", summary="Simple health-check")
 async def health():
-    """
-    Einfacher Health-Check-Endpunkt.
-    Gibt 'ok' zurück, wenn der Server läuft.
-    """
     return {"status": "ok"}
