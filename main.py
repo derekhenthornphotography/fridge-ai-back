@@ -225,7 +225,7 @@ async def analyze_image(file: UploadFile = File(...)):
     return JSONResponse(content={"items": items})
 
 
-@app.post("/ai-recipes/")
+@app.post("/ai-recipes/", summary="Generate recipes with OpenAI")
 async def ai_recipes(payload: RecipeAIRequest) -> Dict[str, Any]:
     """
     Takes detected items and asks OpenAI for matching recipes.
