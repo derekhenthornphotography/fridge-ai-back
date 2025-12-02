@@ -66,145 +66,164 @@ def call_backend_recipes(detected_items: List[Dict[str, Any]]) -> List[Dict[str,
 
 # === Streamlit UI ===
 
-st.set_page_config(
-    page_title="KitchenWise – Your cooking companion",
-    page_icon="🍳",
-)
+st.set_page_config(page_title="KitchenWise – Food Detector", page_icon="🥕")
 
-st.title("KitchenWise")
-st.subheader("Your cooking companion for everyday meals.")
+st.title("KitchenWise – Lebensmittel erkennen & Rezepte finden")
 
-st.write(
+st.markdown(
     """
-Upload a photo of your ingredients and let KitchenWise:
+KitchenWise works in two steps:
 
-- **Recognise what’s there** using food image detection  
-- **Suggest practical recipes** based on what you already have  
-- **Create a focused shopping list** only for what’s missing  
+1. We detect ingredients from your photo.
+2. We generate simple, realistic recipes with what you have – plus a short shopping list.
 
-This is an early **beta version** – results may not always be perfect.
-Your feedback helps to improve the app.
+**Best results:**
+
+- Place food items clearly on a counter (not hidden in boxes).
+- Avoid cluttered full-fridge shots.
+- Turn labels towards the camera (for jars, cartons, bottles).
+- You can always **add or remove ingredients manually** after detection.
 """
 )
 
 st.markdown("### 1. Upload a fridge or ingredient photo")
 
 uploaded_file = st.file_uploader(
-    "Choose a photo (JPG/PNG/WebP)", type=["jpg", "jpeg", "png", "webp"]
+    "Bild auswählen", type=["jpg", "jpeg", "png", "webp"]
 )
 
 if uploaded_file is not None:
+    # Show preview
     st.image(uploaded_file, caption="Uploaded image", use_container_width=True)
-    image_bytes = uploaded_file.read()
-    content_type = uploaded_file.type or "image/jpeg"
 
-    st.markdown("### 2. Analyse ingredients and get recipes")
-
-    if st.button("Analyse image"):
+    # --- STEP 1: Analyze image ---
+    if st.button("Analyze image"):
         with st.spinner("Sending image to your backend..."):
             try:
+                image_bytes = uploaded_file.getvalue()
+                content_type = uploaded_file.type  # e.g. image/jpeg
                 detected_items = call_backend_analyze(image_bytes, content_type)
             except requests.HTTPError as e:
                 st.error(f"HTTP error from backend (/analyze-image/): {e.response.text}")
+                st.stop()
             except Exception as e:
                 st.error(f"Error during analysis: {e}")
+                st.stop()
+
+            if not detected_items:
+                st.warning("No relevant ingredients detected.")
+                st.stop()
+
+            # Filter low-confidence results
+            filtered_items = [
+                item for item in detected_items
+                if item["score"] >= CONFIDENCE_THRESHOLD
+            ]
+
+            if not filtered_items:
+                st.warning("The model returned only very low-confidence results.")
+                st.stop()
+
+            # Store detected items in session for later steps
+            st.session_state.detected_items = filtered_items
+            # Whenever we re-analyze, clear old recipe suggestions
+            st.session_state.pop("suggestions", None)
+            st.success(f"Detected {len(filtered_items)} ingredient(s). Adjust them below.")
+
+    # --- STEP 2: Adjust ingredients & generate recipes ---
+    if "detected_items" in st.session_state:
+        filtered_items = st.session_state.detected_items
+
+        st.subheader("Detected ingredients")
+        for item in filtered_items:
+            st.write(f"- **{item['name']}** ({item['score']:.2f})")
+
+        st.markdown("---")
+        st.subheader("Adjust ingredients before generating recipes")
+
+        all_names = [item["name"] for item in filtered_items]
+        default_selection = all_names  # pre-select everything
+
+        selected_names = st.multiselect(
+            "Which of these ingredients should KitchenWise use?",
+            options=all_names,
+            default=default_selection,
+            key="ingredient_select",
+        )
+
+        extra_ingredients_raw = st.text_input(
+            "Add more ingredients manually (comma separated)",
+            placeholder="e.g. soy sauce, orange juice, ketchup",
+            key="extra_ingredients",
+        )
+
+        # Checkbox that also affects already generated recipes
+        only_full = st.checkbox(
+            "Show only recipes where all ingredients are available",
+            value=False,
+            key="only_full_recipes",
+        )
+
+        # --- Button: Generate recipes ---
+        if st.button("Generate recipes"):
+            final_items = []
+
+            # Keep only selected detected items
+            for item in filtered_items:
+                if item["name"] in selected_names:
+                    final_items.append(item)
+
+            # Add manually entered ingredients as high-confidence items
+            if extra_ingredients_raw.strip():
+                extras = [
+                    s.strip().lower()
+                    for s in extra_ingredients_raw.split(",")
+                    if s.strip()
+                ]
+                for name in extras:
+                    final_items.append({"name": name, "score": 1.0})
+
+            if not final_items:
+                st.warning("No ingredients selected or added. Please select or add at least one.")
             else:
-                if not detected_items:
-                    st.warning("No relevant food items detected.")
+                try:
+                    suggestions = call_backend_recipes(final_items)
+                except requests.HTTPError as e:
+                    st.error(f"HTTP error from backend (/ai-recipes/): {e.response.text}")
+                except Exception as e:
+                    st.error(f"Error while generating recipes: {e}")
                 else:
-                    # 1. Show raw detection results
-                    st.subheader("Detected ingredients")
-                    for item in detected_items:
-                        if item["score"] < CONFIDENCE_THRESHOLD:
-                            continue
-                        st.write(f"- **{item['name']}** ({item['score']:.2f})")
+                    st.session_state.suggestions = suggestions
 
-                    st.markdown("---")
-                    st.subheader("Adjust ingredients")
+        # --- Always show the last generated recipes (if any) ---
+        suggestions = st.session_state.get("suggestions", [])
 
-                    detected_names = [it["name"] for it in detected_items]
+        if suggestions:
+            st.markdown("### Recipe suggestions")
+            for s in suggestions:
+                name = s.get("name", "Unnamed recipe")
+                ingredients = s.get("ingredients", [])
+                steps = s.get("steps", [])
+                have = s.get("have", [])
+                missing = s.get("missing", [])
+                total = s.get("total", len(ingredients))
 
-                    selected_items = st.multiselect(
-                        "Which ingredients should be used for recipe suggestions?",
-                        options=detected_names,
-                        default=detected_names,
-                    )
+                # Apply "only full" filter dynamically
+                if st.session_state.get("only_full_recipes") and missing:
+                    continue
 
-                    extra_items_str = st.text_input(
-                        "Optional: Add more ingredients manually (comma-separated)",
-                        value="",
-                        placeholder="e.g. paprika, feta, tomatoes",
-                    )
+                match_info = f"{len(have)}/{total} ingredients available"
 
-                    # Build final list of ingredients
-                    final_items = []
+                st.markdown(f"#### 🍽️ {name} ({match_info})")
+                st.write("**Ingredients:** ", ", ".join(ingredients))
+                st.write("✅ You already have:", ", ".join(have) if have else "–")
+                st.write("🛒 Still need to buy:", ", ".join(missing) if missing else "Nothing, you’re good!")
 
-                    # Selected detected items
-                    for it in detected_items:
-                        if it["name"] in selected_items:
-                            final_items.append(it)
-
-                    # Manually added items (score = 1.0)
-                    if extra_items_str.strip():
-                        extra_names = [
-                            x.strip().lower()
-                            for x in extra_items_str.split(",")
-                            if x.strip()
-                        ]
-                        for name in extra_names:
-                            final_items.append({"name": name, "score": 1.0})
-
-                    if not final_items:
-                        st.info("Please select or add at least one ingredient.")
-                        st.stop()  # stop Streamlit run here
-
-                    st.markdown("---")
-                    st.subheader("Recipe ideas (from backend)")
-
-                    only_full = st.checkbox(
-                        "Show only recipes where all ingredients are available",
-                        value=False,
-                    )
-
-                    try:
-                        suggestions = call_backend_recipes(final_items)
-                    except requests.HTTPError as e:
-                        st.error(f"HTTP error from backend (/suggest-recipes/): {e.response.text}")
-                    except Exception as e:
-                        st.error(f"Error while getting recipes: {e}")
-                    else:
-                        if not suggestions:
-                            st.info(
-                                "No recipes available for this combination yet in the backend."
-                            )
-                        else:
-                            for s in suggestions:
-                                name = s.get("name", "Unnamed recipe")
-                                ingredients = s.get("ingredients", [])
-                                steps = s.get("steps", [])
-                                have = s.get("have", [])
-                                missing = s.get("missing", [])
-                                total = s.get("total", len(ingredients))
-
-                                if only_full and missing:
-                                    continue
-
-                                match_info = f"{len(have)}/{total} ingredients available"
-
-                                st.markdown(f"### 🍽️ {name} ({match_info})")
-                                st.write("**Ingredients:** ", ", ".join(ingredients))
-                                st.write(
-                                    "✅ Already available:",
-                                    ", ".join(have) if have else "–",
-                                )
-                                st.write(
-                                    "🛒 To buy:",
-                                    ", ".join(missing) if missing else "Nothing, you have everything!",
-                                )
-
-                                with st.expander("Show preparation steps"):
-                                    for i, step in enumerate(steps, start=1):
-                                        st.write(f"{i}. {step}")
+                with st.expander("Show preparation steps"):
+                    for i, step in enumerate(steps, start=1):
+                        st.write(f"{i}. {step}")
+        else:
+            st.info("No recipes generated yet. Adjust ingredients and click **Generate recipes**.")
 
 st.markdown("---")
 st.markdown(
