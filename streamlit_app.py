@@ -8,7 +8,7 @@ import streamlit as st
 
 BACKEND_BASE_URL = "https://fridge-ai-back.onrender.com"
 BACKEND_ANALYZE_URL = f"https://fridge-ai-back.onrender.com/analyze-image/"
-BACKEND_SUGGEST_URL = f"https://fridge-ai-back.onrender.com/suggest-recipes/"
+BACKEND_SUGGEST_URL = f"https://fridge-ai-back.onrender.com/ai-recipes/"
 CONFIDENCE_THRESHOLD = 0.05  # nur für Anzeige/Filter
 
 
