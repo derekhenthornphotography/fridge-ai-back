@@ -9,6 +9,7 @@ import streamlit as st
 BACKEND_BASE_URL = "https://fridge-ai-back.onrender.com"
 BACKEND_ANALYZE_URL = f"https://fridge-ai-back.onrender.com/analyze-image/"
 BACKEND_SUGGEST_URL = f"https://fridge-ai-back.onrender.com/ai-recipes/"
+BACKEND_SUGGEST_URL = f"https://fridge-ai-back.onrender.com/feedback/"
 CONFIDENCE_THRESHOLD = 0.05  # nur für Anzeige/Filter
 
 
@@ -62,6 +63,26 @@ def call_backend_recipes(detected_items: List[Dict[str, Any]]) -> List[Dict[str,
 
     suggestions = data.get("suggestions", [])
     return suggestions
+
+
+def send_feedback(recipe: Dict[str, Any], liked: bool) -> None:
+    """
+    Sends simple feedback about a recipe to the backend.
+    """
+    payload = {
+        "recipe_name": recipe.get("name", ""),
+        "liked": liked,
+        "ingredients": recipe.get("ingredients", []),
+        "have": recipe.get("have", []),
+        "missing": recipe.get("missing", []),
+        "source": "streamlit_v1",
+    }
+
+    try:
+        resp = requests.post(BACKEND_FEEDBACK_URL, json=payload, timeout=5)
+        resp.raise_for_status()
+    except Exception as e:
+        st.warning(f"Could not send feedback to backend: {e}")
 
 
 # === Streamlit UI ===
@@ -195,35 +216,72 @@ if uploaded_file is not None:
                 else:
                     st.session_state.suggestions = suggestions
 
-        # --- Always show the last generated recipes (if any) ---
-        suggestions = st.session_state.get("suggestions", [])
+       # --- Always show the last generated recipes (if any) ---
+suggestions = st.session_state.get("suggestions", [])
 
-        if suggestions:
-            st.markdown("### Recipe suggestions")
-            for s in suggestions:
-                name = s.get("name", "Unnamed recipe")
-                ingredients = s.get("ingredients", [])
-                steps = s.get("steps", [])
-                have = s.get("have", [])
-                missing = s.get("missing", [])
-                total = s.get("total", len(ingredients))
+if suggestions:
+    st.markdown("### Recipe suggestions")
 
-                # Apply "only full" filter dynamically
-                if st.session_state.get("only_full_recipes") and missing:
-                    continue
+    for idx, s in enumerate(suggestions):
+        name = s.get("name", "Unnamed recipe")
+        ingredients = s.get("ingredients", [])
+        steps = s.get("steps", [])
+        have = s.get("have", [])
+        missing = s.get("missing", [])
+        total = s.get("total", len(ingredients))
 
-                match_info = f"{len(have)}/{total} ingredients available"
+        # Apply "only full recipes" filter dynamically
+        if st.session_state.get("only_full_recipes") and missing:
+            continue
 
-                st.markdown(f"#### 🍽️ {name} ({match_info})")
-                st.write("**Ingredients:** ", ", ".join(ingredients))
-                st.write("✅ You already have:", ", ".join(have) if have else "–")
-                st.write("🛒 Still need to buy:", ", ".join(missing) if missing else "Nothing, you’re good!")
+        match_info = f"{len(have)}/{total} ingredients available"
 
-                with st.expander("Show preparation steps"):
+        with st.container():
+
+        # Feedback buttons
+        cols = st.columns(2)
+        with cols[0]:
+            if st.button("👍 Sounds good", key=f"like_{idx}"):
+                send_feedback(s, liked=True)
+                st.success("Thanks for your feedback!")
+
+        with cols[1]:
+            if st.button("👎 Not my taste", key=f"dislike_{idx}"):
+                send_feedback(s, liked=False)
+                st.info("Got it, thanks for letting us know.")
+                    
+            st.markdown(f"#### 🍽️ {name}")
+            st.caption(match_info)
+
+            # Ingredients as bullet list
+            st.markdown("**Ingredients:**")
+            if ingredients:
+                for ing in ingredients:
+                    st.markdown(f"- {ing}")
+            else:
+                st.markdown("- n/a")
+
+            # Have / missing
+            st.markdown(
+                "**You already have:** "
+                + (", ".join(have) if have else "–")
+            )
+            st.markdown(
+                "**You still need to buy:** "
+                + (", ".join(missing) if missing else "Nothing, you’re good!")
+            )
+
+            # Steps as numbered list
+            with st.expander("Show preparation steps"):
+                if steps:
                     for i, step in enumerate(steps, start=1):
-                        st.write(f"{i}. {step}")
-        else:
-            st.info("No recipes generated yet. Adjust ingredients and click **Generate recipes**.")
+                        st.markdown(f"{i}. {step}")
+                else:
+                    st.write("No steps provided.")
+
+            st.markdown("---")
+else:
+    st.info("No recipes generated yet. Adjust ingredients and click **Generate recipes**.")
 
 st.markdown("---")
 st.markdown(

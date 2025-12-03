@@ -84,6 +84,15 @@ class RecipeAIRequest(BaseModel):
     items: List[DetectedItem]
 
 
+class Feedback(BaseModel):
+    recipe_name: str
+    liked: bool
+    ingredients: List[str]
+    have: List[str]
+    missing: List[str]
+    source: str | None = None  # e.g. "streamlit_v1"    
+
+
 # === FastAPI app ===
 
 app = FastAPI(
@@ -225,28 +234,43 @@ async def analyze_image(file: UploadFile = File(...)):
     return JSONResponse(content={"items": items})
 
 
-@app.post("/ai-recipes/", summary="Generate recipes with OpenAI")
+@app.post("/ai-recipes/")
 async def ai_recipes(payload: RecipeAIRequest) -> Dict[str, Any]:
     """
-    Takes detected items and asks OpenAI for matching recipes.
-    Returns a list of recipes with ingredients, steps, and 'have'/'missing'.
+    Take detected ingredients and ask OpenAI for realistic, home-friendly recipes.
+    Returns a list of recipes with ingredients, steps, and have/missing lists.
     """
-    if not OPENAI_API_KEY or client is None:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured on the server")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
 
+    # Turn detected items into a simple list of ingredient names
     ingredient_list = [item.name.lower() for item in payload.items if item.name]
 
     if not ingredient_list:
         raise HTTPException(status_code=400, detail="No ingredients provided")
 
     system_prompt = (
-        "You are a helpful cooking assistant. "
-        "The user has some ingredients available. "
-        "Suggest 3 realistic, home-cook friendly recipes. "
-        "Each recipe must have: name, ingredients list, step-by-step instructions, "
-        "and two lists: 'have' (ingredients already available) and 'missing' (what to buy). "
-        "Keep recipes simple, 20–40 minutes cooking time. "
-        "Respond ONLY with valid JSON."
+        "You are KitchenWise, a friendly home-cooking assistant.\n"
+        "The user has some ingredients available and wants simple, realistic recipes.\n"
+        "\n"
+        "Rules:\n"
+        "- Suggest exactly 3 recipes.\n"
+        "- Each recipe must be doable by a normal home cook.\n"
+        "- Focus on 2–4 main ingredients from the list, plus a few basic pantry items.\n"
+        "- Use ingredients that are common in Europe (no exotic or hard-to-find things).\n"
+        "- Cooking time per recipe: roughly 20–40 minutes.\n"
+        "- Keep instructions clear, short and step-by-step.\n"
+        "- Respect the available ingredients: do NOT assume the user has everything.\n"
+        "- For each recipe, compute which ingredients are ALREADY available (have)\n"
+        "  and which ones need to be bought (missing).\n"
+        "- If very few ingredients are available, suggest something extremely simple\n"
+        "  (e.g. toast, scrambled eggs, simple salad).\n"
+        "\n"
+        "Output format:\n"
+        "- Respond ONLY with valid JSON.\n"
+        "- Do not include any explanation or text outside the JSON.\n"
+        "- Extra fields are allowed, but these fields are required for each recipe:\n"
+        "  name, ingredients, steps, have, missing.\n"
     )
 
     user_prompt = (
@@ -262,7 +286,8 @@ async def ai_recipes(payload: RecipeAIRequest) -> Dict[str, Any]:
         '      \"missing\": [\"...\"]\n'
         "    }\n"
         "  ]\n"
-        "}"
+        "}\n"
+        "Make sure the JSON is valid and can be parsed by a machine."
     )
 
     try:
@@ -273,7 +298,7 @@ async def ai_recipes(payload: RecipeAIRequest) -> Dict[str, Any]:
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
-            temperature=0.5,
+            temperature=0.6,
         )
         content = response.choices[0].message.content
         data = json.loads(content)
@@ -283,7 +308,39 @@ async def ai_recipes(payload: RecipeAIRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"AI error: {e}")
 
     recipes = data.get("recipes", [])
-    return {"suggestions": recipes}
+
+    # Add 'total' for each recipe so the frontend can display X/Y ingredients
+    suggestions: List[Dict[str, Any]] = []
+    for r in recipes:
+        ingredients = r.get("ingredients", []) or []
+        have = r.get("have", []) or []
+        missing = r.get("missing", []) or []
+
+        suggestions.append(
+            {
+                "name": r.get("name", "Unnamed recipe"),
+                "ingredients": ingredients,
+                "steps": r.get("steps", []) or [],
+                "have": have,
+                "missing": missing,
+                "total": len(ingredients),
+            }
+        )
+
+    return {"suggestions": suggestions}
+
+
+@app.post("/feedback/")
+async def feedback(fb: Feedback):
+    """
+    Simple feedback endpoint.
+    For now, we just log feedback to the server console and return 'ok'.
+    Later we can store this in a database or analytics system.
+    """
+    print("=== FEEDBACK RECEIVED ===")
+    print(fb.dict())
+    print("=========================")
+    return {"status": "ok"}
 
 
 @app.get("/health", summary="Simple health-check")
